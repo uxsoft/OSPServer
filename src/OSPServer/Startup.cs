@@ -15,33 +15,7 @@ namespace OSPServer
 {
     public class Startup
     {
-        // This method gets called by the runtime. Use this method to add services to the container.
-        // For more information on how to configure your application, visit http://go.microsoft.com/fwlink/?LinkID=398940
-        public void ConfigureServices(IServiceCollection services)
-        {
-        }
-
-        public async Task ProcessCount(HttpContext context, HashSet<string> Words)
-        {
-            string count = Words.Count.ToString();
-            Words.Clear();
-            await context.Response.WriteAsync(count);
-        }
-
-        public async Task ProcessData(HttpContext context, HashSet<string> Words)
-        {
-            using (var degzip = new GZipStream(context.Request.Body, CompressionMode.Decompress))
-            using (var sr = new StreamReader(degzip))
-            {
-                string part = await sr.ReadToEndAsync();
-                foreach (string word in part.Split(new string[] { " ", "\t", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries))
-                    Words.Add(word);
-            }
-        }
-
-        static HashSet<string> CurrentWords = new HashSet<string>();
-        static List<Task> DataTasks = new List<Task>();
-        static object triageLock = new object() { };
+        public Queue<Session> Sessions { get; set; } = new Queue<Session>();
 
         public void Configure(IApplicationBuilder app)
         {
@@ -53,30 +27,11 @@ namespace OSPServer
                 {
                     if (context.Request.Path.Value.Contains("data"))
                     {
-                        Task processingData;
-                        lock (triageLock)
-                        {
-                            processingData = ProcessData(context, CurrentWords);
-                            DataTasks.Add(processingData);
-                        }
-
-                        await processingData;
+                        PostData(context);
                     }
                     else if (context.Request.Path.Value.Contains("count"))
                     {
-                        IEnumerable<Task> tasksThatNeedToBeCompleted;
-                        HashSet<string> Words;
-                        lock (triageLock)
-                        {
-                            Words = CurrentWords;
-                            tasksThatNeedToBeCompleted = DataTasks;
-
-                            CurrentWords = new HashSet<string>();
-                            DataTasks = new List<Task>();
-                        }
-
-                        await Task.WhenAll(tasksThatNeedToBeCompleted);
-                        await ProcessCount(context, Words);
+                        await GetCount(context);
                     }
                 }
                 catch (Exception ex)
@@ -84,6 +39,27 @@ namespace OSPServer
                     await context.Response.WriteAsync(ex.ToString());
                 }
             });
+        }
+
+        public void PostData(HttpContext context)
+        {
+            lock(Sessions)
+            {
+                Session currentSession = Sessions.Peek();
+                currentSession.BeginProcessingData(context.Request.Body);
+            }
+        }
+
+        public async Task GetCount(HttpContext context)
+        {
+            Session currentSession;
+            lock(Sessions)
+            {
+                currentSession = Sessions.Dequeue();
+                Sessions.Enqueue(new Session());
+            }
+            int count = await currentSession.Count();
+            await context.Response.WriteAsync(count.ToString());
         }
 
         // Entry point for the application.
