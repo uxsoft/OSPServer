@@ -6,6 +6,10 @@ using Microsoft.AspNet.Builder;
 using Microsoft.AspNet.Hosting;
 using Microsoft.AspNet.Http;
 using Microsoft.Extensions.DependencyInjection;
+using System.IO.Compression;
+using System.IO;
+using System.Text;
+using System.Threading;
 
 namespace OSPServer
 {
@@ -17,14 +21,68 @@ namespace OSPServer
         {
         }
 
-        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        public async Task ProcessCount(HttpContext context, HashSet<string> Words)
+        {
+            string count = Words.Count.ToString();
+            Words.Clear();
+            await context.Response.WriteAsync(count);
+        }
+
+        public async Task ProcessData(HttpContext context, HashSet<string> Words)
+        {
+            using (var degzip = new GZipStream(context.Request.Body, CompressionMode.Decompress))
+            using (var sr = new StreamReader(degzip))
+            {
+                string part = await sr.ReadToEndAsync();
+                foreach (string word in part.Split(new string[] { " ", "\t", "\r", "\n" }, StringSplitOptions.RemoveEmptyEntries))
+                    Words.Add(word);
+            }
+        }
+
+        static HashSet<string> CurrentWords = new HashSet<string>();
+        static List<Task> DataTasks = new List<Task>();
+        static object triageLock = new object() { };
+
         public void Configure(IApplicationBuilder app)
         {
             app.UseIISPlatformHandler();
 
             app.Run(async (context) =>
             {
-                await context.Response.WriteAsync("Hello World!");
+                try
+                {
+                    if (context.Request.Path.Value.Contains("data"))
+                    {
+                        Task processingData;
+                        lock (triageLock)
+                        {
+                            processingData = ProcessData(context, CurrentWords);
+                            DataTasks.Add(processingData);
+                        }
+
+                        await processingData;
+                    }
+                    else if (context.Request.Path.Value.Contains("count"))
+                    {
+                        IEnumerable<Task> tasksThatNeedToBeCompleted;
+                        HashSet<string> Words;
+                        lock (triageLock)
+                        {
+                            Words = CurrentWords;
+                            tasksThatNeedToBeCompleted = DataTasks;
+
+                            CurrentWords = new HashSet<string>();
+                            DataTasks = new List<Task>();
+                        }
+
+                        await Task.WhenAll(tasksThatNeedToBeCompleted);
+                        await ProcessCount(context, Words);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    await context.Response.WriteAsync(ex.ToString());
+                }
             });
         }
 
