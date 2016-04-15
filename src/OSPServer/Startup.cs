@@ -15,6 +15,11 @@ namespace OSPServer
 {
     public class Startup
     {
+        public Startup()
+        {
+            Sessions.Enqueue(new Session());
+        }
+
         public Queue<Session> Sessions { get; set; } = new Queue<Session>();
 
         public void Configure(IApplicationBuilder app)
@@ -27,7 +32,7 @@ namespace OSPServer
                 {
                     if (context.Request.Path.Value.Contains("data"))
                     {
-                        PostData(context);
+                        await PostData(context);
                     }
                     else if (context.Request.Path.Value.Contains("count"))
                     {
@@ -41,19 +46,20 @@ namespace OSPServer
             });
         }
 
-        public void PostData(HttpContext context)
+        public async Task PostData(HttpContext context)
         {
-            lock(Sessions)
+            Session currentSession;
+            lock (Sessions)
             {
-                Session currentSession = Sessions.Peek();
-                currentSession.BeginProcessingData(context.Request.Body);
+                currentSession = Sessions.Peek();
             }
+            await currentSession.ProcessData(context.Request.Body);
         }
 
         public async Task GetCount(HttpContext context)
         {
             Session currentSession;
-            lock(Sessions)
+            lock (Sessions)
             {
                 currentSession = Sessions.Dequeue();
                 Sessions.Enqueue(new Session());

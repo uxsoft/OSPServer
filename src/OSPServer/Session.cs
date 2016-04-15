@@ -12,7 +12,7 @@ namespace OSPServer
         public HashSet<string> Words { get; set; } = new HashSet<string>();
         public List<Task> Workers { get; set; } = new List<Task>();
 
-        public void BeginProcessingData(Stream body)
+        public async Task ProcessData(Stream body)
         {
             Task worker = Task.Factory.StartNew(async () =>
             {
@@ -25,6 +25,7 @@ namespace OSPServer
                 }
             });
             Workers.Add(worker);
+            await worker;
         }
 
         public async Task<int> Count()
